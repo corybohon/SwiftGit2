@@ -27,6 +27,9 @@ External/libgit2-mac
 External/ios-openssl
 External/libgit2-ios
 External/libssh2-ios
+External/libssh2.a
+External/libssl.a
+External/libcrypto.a
 
 ### fastlane ###
 # fastlane - A streamlined workflow tool for Cocoa deployment
