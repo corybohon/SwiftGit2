@@ -1,0 +1,101 @@
+#!/bin/bash
+
+set -e
+
+SCRIPT_DIR=$(dirname "$0")
+source "${SCRIPT_DIR}/xcode_functions.sh"
+
+if [[ $(uname -m) == 'arm64' ]]; then
+    PATH="/opt/homebrew/bin:$PATH"
+else
+    PATH="/usr/local/bin:$PATH"
+fi
+
+pushd "$SCRIPT_DIR/.." > /dev/null
+ROOT_PATH="$PWD"
+popd > /dev/null
+
+CLANG="/usr/bin/xcrun clang"
+
+XCODE_MAJOR_VERSION=$(xcode_major_version)
+XCODE_MINOR_VERSION=$(xcode_minor_version)
+
+CAN_BUILD_ARM="0"
+if [ "${XCODE_MAJOR_VERSION}" -ge "13" ]; then
+    CAN_BUILD_ARM="1"
+elif [ "${XCODE_MAJOR_VERSION}" -eq "12" ] && [ "${XCODE_MINOR_VERSION}" -ge "2" ]; then
+    CAN_BUILD_ARM="1"
+fi
+
+ARCHS="x86_64"
+if [ "${CAN_BUILD_ARM}" -eq "1" ]; then
+    ARCHS="${ARCHS} arm64 arm64e"
+fi
+
+# Skip if fat binaries already exist with x86_64
+if [ -f "${ROOT_PATH}/External/libssl.a" ] && \
+   [ -f "${ROOT_PATH}/External/libcrypto.a" ] && \
+   lipo -info "${ROOT_PATH}/External/libssl.a" 2>/dev/null | grep -q "x86_64"
+then
+    echo "No update needed."
+    exit 0
+fi
+
+LIBRARY_NAME="OpenSSL"
+LIB_PATH="${ROOT_PATH}/External/openssl-mac"
+rm -rf "${LIB_PATH}"
+mkdir -p "${LIB_PATH}"
+
+PLATFORM="macosx"
+SDKVERSION=$(macos_sdk_version)
+SDKNAME="${PLATFORM}${SDKVERSION}"
+SDKROOT="$(sdk_path ${SDKNAME})"
+
+BUILT_CRYPTO_PATHS=()
+BUILT_SSL_PATHS=()
+
+for ARCH in ${ARCHS}; do
+    echo "Building ${LIBRARY_NAME} for ${SDKNAME} ${ARCH}"
+    echo "Please stand by..."
+
+    INSTALL_PREFIX="${LIB_PATH}/bin/${SDKNAME}-${ARCH}.sdk"
+    mkdir -p "${INSTALL_PREFIX}"
+    LOG="${INSTALL_PREFIX}/build-openssl.log"
+    echo "${LOG}"
+
+    TMP_BUILD="/tmp/openssl-mac-build-${ARCH}"
+    TMP_INSTALL="/tmp/openssl-mac-install-${ARCH}"
+
+    rm -rf "${TMP_BUILD}" "${TMP_INSTALL}"
+    cp -r "${ROOT_PATH}/External/openssl" "${TMP_BUILD}"
+    pushd "${TMP_BUILD}" > /dev/null
+
+    # BSD-generic64 avoids arch-specific asm that may not cross-compile cleanly.
+    # Install to a space-free temp path; OpenSSL 1.0.2 Makefiles break on spaces.
+    ./Configure BSD-generic64 no-gost no-asm \
+        --prefix="${TMP_INSTALL}" \
+        --openssldir="${TMP_INSTALL}" >> "${LOG}" 2>&1
+
+    perl -i -pe "s|^CC= gcc|CC= ${CLANG} -arch ${ARCH} |g" Makefile >> "${LOG}" 2>&1
+    perl -i -pe "s|^CFLAG= (.*)|CFLAG= -isysroot ${SDKROOT} \$1|g" Makefile >> "${LOG}" 2>&1
+
+    make -j$(sysctl -n hw.logicalcpu) >> "${LOG}" 2>&1
+    make install_sw >> "${LOG}" 2>&1
+
+    popd > /dev/null
+    rm -rf "${TMP_BUILD}"
+
+    mkdir -p "${INSTALL_PREFIX}/lib"
+    cp "${TMP_INSTALL}/lib/libcrypto.a" "${INSTALL_PREFIX}/lib/"
+    cp "${TMP_INSTALL}/lib/libssl.a" "${INSTALL_PREFIX}/lib/"
+    rm -rf "${TMP_INSTALL}"
+
+    BUILT_CRYPTO_PATHS+=("${INSTALL_PREFIX}/lib/libcrypto.a")
+    BUILT_SSL_PATHS+=("${INSTALL_PREFIX}/lib/libssl.a")
+done
+
+echo "Building fat binaries..."
+lipo -create "${BUILT_CRYPTO_PATHS[@]}" -output "${ROOT_PATH}/External/libcrypto.a"
+lipo -create "${BUILT_SSL_PATHS[@]}" -output "${ROOT_PATH}/External/libssl.a"
+
+echo "OpenSSL has been updated."

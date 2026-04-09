@@ -1,0 +1,98 @@
+#!/bin/bash
+
+set -e
+
+SCRIPT_DIR=$(dirname "$0")
+source "${SCRIPT_DIR}/xcode_functions.sh"
+
+if [[ $(uname -m) == 'arm64' ]]; then
+    PATH="/opt/homebrew/bin:$PATH"
+else
+    PATH="/usr/local/bin:$PATH"
+fi
+
+pushd "$SCRIPT_DIR/.." > /dev/null
+ROOT_PATH="$PWD"
+popd > /dev/null
+
+CLANG="/usr/bin/xcrun clang"
+
+XCODE_MAJOR_VERSION=$(xcode_major_version)
+XCODE_MINOR_VERSION=$(xcode_minor_version)
+
+CAN_BUILD_ARM="0"
+if [ "${XCODE_MAJOR_VERSION}" -ge "13" ]; then
+    CAN_BUILD_ARM="1"
+elif [ "${XCODE_MAJOR_VERSION}" -eq "12" ] && [ "${XCODE_MINOR_VERSION}" -ge "2" ]; then
+    CAN_BUILD_ARM="1"
+fi
+
+ARCHS="x86_64"
+if [ "${CAN_BUILD_ARM}" -eq "1" ]; then
+    ARCHS="${ARCHS} arm64 arm64e"
+fi
+
+# Skip if fat binary already exists with x86_64
+if [ -f "${ROOT_PATH}/External/libssh2.a" ] && \
+   lipo -info "${ROOT_PATH}/External/libssh2.a" 2>/dev/null | grep -q "x86_64"
+then
+    echo "No update needed."
+    exit 0
+fi
+
+LIBRARY_NAME="libssh2"
+LIB_PATH="${ROOT_PATH}/External/libssh2-mac"
+rm -rf "${LIB_PATH}"
+mkdir -p "${LIB_PATH}"
+
+PLATFORM="macosx"
+SDKVERSION=$(macos_sdk_version)
+SDKNAME="${PLATFORM}${SDKVERSION}"
+SDKROOT="$(sdk_path ${SDKNAME})"
+
+BUILT_LIBS=()
+
+for ARCH in ${ARCHS}; do
+    echo "Building ${LIBRARY_NAME} for ${SDKNAME} ${ARCH}"
+    echo "Please stand by..."
+
+    OPENSSL_PREFIX="${ROOT_PATH}/External/openssl-mac/bin/${SDKNAME}-${ARCH}.sdk"
+    INSTALL_PREFIX="${LIB_PATH}/bin/${SDKNAME}-${ARCH}.sdk"
+    mkdir -p "${INSTALL_PREFIX}"
+    LOG="${INSTALL_PREFIX}/build-libssh2.log"
+    echo "${LOG}"
+
+    rm -rf "${LIB_PATH}/src-${ARCH}"
+    cp -R "${ROOT_PATH}/External/libssh2" "${LIB_PATH}/src-${ARCH}"
+    pushd "${LIB_PATH}/src-${ARCH}" > /dev/null
+
+    if [ "${ARCH}" == "arm64" ] || [ "${ARCH}" == "arm64e" ]; then
+        HOST="aarch64-apple-darwin"
+    else
+        HOST="${ARCH}-apple-darwin"
+    fi
+
+    export CC="${CLANG} -arch ${ARCH}"
+    export CFLAGS="-arch ${ARCH} -isysroot ${SDKROOT}"
+    export CPPFLAGS="-arch ${ARCH} -isysroot ${SDKROOT}"
+
+    ./buildconf >> "${LOG}" 2>&1
+    ./configure \
+        --host="${HOST}" \
+        --prefix="${INSTALL_PREFIX}" \
+        --with-openssl \
+        --with-libssl-prefix="${OPENSSL_PREFIX}" \
+        --disable-shared \
+        --enable-static >> "${LOG}" 2>&1
+    make >> "${LOG}" 2>&1
+    make install >> "${LOG}" 2>&1
+
+    popd > /dev/null
+
+    BUILT_LIBS+=("${INSTALL_PREFIX}/lib/libssh2.a")
+done
+
+echo "Building fat binary..."
+lipo -create "${BUILT_LIBS[@]}" -output "${ROOT_PATH}/External/libssh2.a"
+
+echo "libssh2 has been updated."
