@@ -112,13 +112,30 @@ function build_libgit2 ()
     LOG="${INSTALL_PREFIX}/build-libgit2.log"
     echo "$LOG"
 
+    # Make pkg-config (required by libgit2's cmake to find libssh2) findable
+    # in Xcode's restricted build environment, and point it at Homebrew's
+    # libssh2 .pc file.
+    BREW_BIN="$(brew --prefix 2>/dev/null)/bin"
+    LIBSSH2_BREW="$(brew --prefix libssh2 2>/dev/null || echo '')"
+    LIBSSH2_LOCAL="${ROOT_PATH}/External/libssh2-mac/bin/${SDKNAME}-${ARCH}.sdk"
+    SSH2_PREFIX_PATH="${LIBSSH2_LOCAL}"
+    if [ -n "${LIBSSH2_BREW}" ]; then
+        SSH2_PREFIX_PATH="${SSH2_PREFIX_PATH};${LIBSSH2_BREW}"
+        export PKG_CONFIG_PATH="${LIBSSH2_BREW}/lib/pkgconfig:${PKG_CONFIG_PATH}"
+    fi
+    export PATH="${BREW_BIN}:${PATH}"
+
+    # Pre-cache HAVE_LIBSSH2_MEMORY_CREDENTIALS so cmake skips the cross-arch
+    # link test (which fails when building x86_64 on Apple Silicon).
+    # Homebrew libssh2 ≥1.9 always has libssh2_userauth_publickey_frommemory.
     MACOSX_DEPLOYMENT_TARGET="10.9" cmake \
         -DBUILD_SHARED_LIBS:BOOL=OFF \
-        -DCMAKE_PREFIX_PATH:PATH="${ROOT_PATH}/External/libssh2-mac/bin/${SDKNAME}-${ARCH}.sdk" \
+        -DCMAKE_PREFIX_PATH:PATH="${SSH2_PREFIX_PATH}" \
         -DCMAKE_INSTALL_PREFIX:PATH="${INSTALL_PREFIX}/" \
         -DBUILD_CLAR:BOOL=OFF \
         -DTHREADSAFE:BOOL=ON \
         -DCMAKE_OSX_ARCHITECTURES:STRING="${ARCH}" \
+        -DHAVE_LIBSSH2_MEMORY_CREDENTIALS:BOOL=ON \
         .. >> "${LOG}" 2>&1
     cmake --build . --target install >> "${LOG}" 2>&1
 
