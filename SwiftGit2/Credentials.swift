@@ -23,7 +23,18 @@ public enum Credentials {
 	case sshMemory(username: String, publicKey: String, privateKey: String, passphrase: String)
 
 	internal static func fromPointer(_ pointer: UnsafeMutableRawPointer) -> Credentials {
-		return Unmanaged<Wrapper<Credentials>>.fromOpaque(UnsafeRawPointer(pointer)).takeRetainedValue().value
+		// Use takeUnretainedValue so the wrapper is NOT released here.
+		// libgit2 may invoke the credentials callback multiple times (e.g. SSH
+		// retry), and takeRetainedValue would consume the retain on the first
+		// call, leaving a dangling pointer for subsequent calls.
+		// The caller is responsible for balancing the passRetained (see releasePointer).
+		return Unmanaged<Wrapper<Credentials>>.fromOpaque(UnsafeRawPointer(pointer)).takeUnretainedValue().value
+	}
+
+	/// Releases the retain created by `toPointer()`.  Call this once after the
+	/// libgit2 operation that consumed the payload pointer has returned.
+	internal static func releasePointer(_ pointer: UnsafeMutableRawPointer) {
+		Unmanaged<Wrapper<Credentials>>.fromOpaque(UnsafeRawPointer(pointer)).release()
 	}
 
 	internal func toPointer() -> UnsafeMutableRawPointer {

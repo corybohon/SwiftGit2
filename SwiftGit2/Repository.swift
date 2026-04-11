@@ -162,6 +162,13 @@ public final class Repository {
 			git_clone(&pointer, remoteURLString, localPath, &options)
 		}
 
+		// Balance the passRetained created by Credentials.toPointer().
+		// Must happen after git_clone returns (libgit2 may call the callback
+		// multiple times during the operation) and on both success and error paths.
+		if let payload = options.fetch_opts.callbacks.payload {
+			Credentials.releasePointer(payload)
+		}
+
 		guard result == GIT_OK.rawValue else {
 			return Result.failure(NSError(gitError: result, pointOfFailure: "git_clone"))
 		}
