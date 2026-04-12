@@ -53,7 +53,9 @@ private func checkoutOptions(strategy: CheckoutStrategy,
 	return options
 }
 
-private func fetchOptions(credentials: Credentials) -> git_fetch_options {
+private func fetchOptions(credentials: Credentials,
+                          onTransferProgress: ((Int, Int, Int64) -> Void)? = nil,
+                          shouldAbort: (() -> Bool)? = nil) -> git_fetch_options {
 	let pointer = UnsafeMutablePointer<git_fetch_options>.allocate(capacity: 1)
 	git_fetch_init_options(pointer, UInt32(GIT_FETCH_OPTIONS_VERSION))
 
@@ -61,8 +63,10 @@ private func fetchOptions(credentials: Credentials) -> git_fetch_options {
 
 	pointer.deallocate()
 
-	options.callbacks.payload = credentials.toPointer()
+	let context = CloneCallbackContext(credentials, onTransferProgress: onTransferProgress, shouldAbort: shouldAbort)
+	options.callbacks.payload = context.toPointer()
 	options.callbacks.credentials = credentialsCallback
+	options.callbacks.transfer_progress = transferProgressCallback
 
 	return options
 }
@@ -149,11 +153,13 @@ public final class Repository {
 	/// Returns a `Result` with a `Repository` or an error.
 	public class func clone(from remoteURL: URL, to localURL: URL, localClone: Bool = false, bare: Bool = false,
 	                        credentials: Credentials = .default, checkoutStrategy: CheckoutStrategy = .Safe,
-	                        checkoutProgress: CheckoutProgressBlock? = nil) -> Result<Repository, NSError> {
+	                        checkoutProgress: CheckoutProgressBlock? = nil,
+	                        onTransferProgress: ((Int, Int, Int64) -> Void)? = nil,
+	                        shouldAbort: (() -> Bool)? = nil) -> Result<Repository, NSError> {
 		var options = cloneOptions(
 			bare: bare,
 			localClone: localClone,
-			fetchOptions: fetchOptions(credentials: credentials),
+			fetchOptions: fetchOptions(credentials: credentials, onTransferProgress: onTransferProgress, shouldAbort: shouldAbort),
 			checkoutOptions: checkoutOptions(strategy: checkoutStrategy, progress: checkoutProgress))
 
 		var pointer: OpaquePointer? = nil
@@ -162,11 +168,11 @@ public final class Repository {
 			git_clone(&pointer, remoteURLString, localPath, &options)
 		}
 
-		// Balance the passRetained created by Credentials.toPointer().
-		// Must happen after git_clone returns (libgit2 may call the callback
+		// Balance the passRetained created by CloneCallbackContext.toPointer().
+		// Must happen after git_clone returns (libgit2 may call the callbacks
 		// multiple times during the operation) and on both success and error paths.
 		if let payload = options.fetch_opts.callbacks.payload {
-			Credentials.releasePointer(payload)
+			CloneCallbackContext.releasePointer(payload)
 		}
 
 		guard result == GIT_OK.rawValue else {

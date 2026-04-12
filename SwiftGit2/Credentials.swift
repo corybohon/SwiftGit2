@@ -23,16 +23,9 @@ public enum Credentials {
 	case sshMemory(username: String, publicKey: String, privateKey: String, passphrase: String)
 
 	internal static func fromPointer(_ pointer: UnsafeMutableRawPointer) -> Credentials {
-		// Use takeUnretainedValue so the wrapper is NOT released here.
-		// libgit2 may invoke the credentials callback multiple times (e.g. SSH
-		// retry), and takeRetainedValue would consume the retain on the first
-		// call, leaving a dangling pointer for subsequent calls.
-		// The caller is responsible for balancing the passRetained (see releasePointer).
 		return Unmanaged<Wrapper<Credentials>>.fromOpaque(UnsafeRawPointer(pointer)).takeUnretainedValue().value
 	}
 
-	/// Releases the retain created by `toPointer()`.  Call this once after the
-	/// libgit2 operation that consumed the payload pointer has returned.
 	internal static func releasePointer(_ pointer: UnsafeMutableRawPointer) {
 		Unmanaged<Wrapper<Credentials>>.fromOpaque(UnsafeRawPointer(pointer)).release()
 	}
@@ -42,22 +35,56 @@ public enum Credentials {
 	}
 }
 
-/// Handle the request of credentials, passing through to a wrapped block after converting the arguments.
-/// Converts the result to the correct error code required by libgit2 (0 = success, 1 = rejected setting creds,
-/// -1 = error)
+// MARK: - CloneCallbackContext
+
+/// Bundles credentials and an optional transfer-progress handler so both can
+/// share the single `payload` pointer available in `git_remote_callbacks`.
+///
+/// The progress handler receives `(receivedObjects, totalObjects, receivedBytes)`
+/// and is called on whichever thread libgit2 runs the transfer on.
+/// Set `shouldAbort` to a closure that returns `true` to have the next
+/// progress callback return `GIT_EUSER`, causing libgit2 to abort the operation.
+final class CloneCallbackContext {
+	let credentials: Credentials
+	let onTransferProgress: ((Int, Int, Int64) -> Void)?
+	let shouldAbort: (() -> Bool)?
+
+	init(_ credentials: Credentials,
+		 onTransferProgress: ((Int, Int, Int64) -> Void)? = nil,
+		 shouldAbort: (() -> Bool)? = nil) {
+		self.credentials = credentials
+		self.onTransferProgress = onTransferProgress
+		self.shouldAbort = shouldAbort
+	}
+
+	func toPointer() -> UnsafeMutableRawPointer {
+		Unmanaged.passRetained(self).toOpaque()
+	}
+
+	static func fromPointer(_ pointer: UnsafeMutableRawPointer) -> CloneCallbackContext {
+		Unmanaged<CloneCallbackContext>.fromOpaque(pointer).takeUnretainedValue()
+	}
+
+	static func releasePointer(_ pointer: UnsafeMutableRawPointer) {
+		Unmanaged<CloneCallbackContext>.fromOpaque(pointer).release()
+	}
+}
+
+// MARK: - C callbacks
+
+/// libgit2 credentials callback — extracts credentials from the `CloneCallbackContext` payload.
 internal func credentialsCallback(
 	cred: UnsafeMutablePointer<UnsafeMutablePointer<git_cred>?>?,
 	url: UnsafePointer<CChar>?,
 	username: UnsafePointer<CChar>?,
 	_: UInt32,
-	payload: UnsafeMutableRawPointer? ) -> Int32 {
+	payload: UnsafeMutableRawPointer?) -> Int32 {
 
+	let name = username.map(String.init(cString:))
+	let context = CloneCallbackContext.fromPointer(payload!)
 	let result: Int32
 
-	// Find username_from_url
-	let name = username.map(String.init(cString:))
-
-	switch Credentials.fromPointer(payload!) {
+	switch context.credentials {
 	case .default:
 		result = git_cred_default_new(cred)
 	case .sshAgent:
@@ -69,4 +96,18 @@ internal func credentialsCallback(
 	}
 
 	return (result != GIT_OK.rawValue) ? -1 : 0
+}
+
+/// libgit2 transfer-progress callback — forwards stats to the handler stored in the payload context.
+internal func transferProgressCallback(
+	stats: UnsafePointer<git_indexer_progress>?,
+	payload: UnsafeMutableRawPointer?) -> Int32 {
+
+	guard let stats, let payload else { return 0 }
+	let context = CloneCallbackContext.fromPointer(payload)
+	if context.shouldAbort?() == true { return -1 }  // GIT_EUSER — tells libgit2 to abort
+	guard let handler = context.onTransferProgress else { return 0 }
+	let s = stats.pointee
+	handler(Int(s.received_objects), Int(s.total_objects), Int64(s.received_bytes))
+	return 0
 }
