@@ -153,6 +153,7 @@ public final class Repository {
 	/// Returns a `Result` with a `Repository` or an error.
 	public class func clone(from remoteURL: URL, to localURL: URL, localClone: Bool = false, bare: Bool = false,
 	                        credentials: Credentials = .default, checkoutStrategy: CheckoutStrategy = .Safe,
+	                        checkoutBranch: String? = nil,
 	                        checkoutProgress: CheckoutProgressBlock? = nil,
 	                        onTransferProgress: ((Int, Int, Int64) -> Void)? = nil,
 	                        shouldAbort: (() -> Bool)? = nil) -> Result<Repository, NSError> {
@@ -164,8 +165,21 @@ public final class Repository {
 
 		var pointer: OpaquePointer? = nil
 		let remoteURLString = (remoteURL as NSURL).isFileReferenceURL() ? remoteURL.path : remoteURL.absoluteString
-		let result = localURL.withUnsafeFileSystemRepresentation { localPath in
-			git_clone(&pointer, remoteURLString, localPath, &options)
+
+		// checkout_branch must point to a C string that stays alive for the duration
+		// of git_clone, so we set it inside the withCString closure.
+		let result: Int32
+		if let branch = checkoutBranch {
+			result = branch.withCString { branchCStr in
+				options.checkout_branch = branchCStr
+				return localURL.withUnsafeFileSystemRepresentation { localPath in
+					git_clone(&pointer, remoteURLString, localPath, &options)
+				}
+			}
+		} else {
+			result = localURL.withUnsafeFileSystemRepresentation { localPath in
+				git_clone(&pointer, remoteURLString, localPath, &options)
+			}
 		}
 
 		// Balance the passRetained created by CloneCallbackContext.toPointer().
