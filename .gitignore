@@ -27,6 +27,8 @@ External/libgit2-mac
 External/ios-openssl
 External/libgit2-ios
 External/libssh2-ios
+External/libssh2-mac
+External/openssl-mac
 External/libssh2.a
 External/libssl.a
 External/libcrypto.a

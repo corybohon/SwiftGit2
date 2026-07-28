@@ -543,7 +543,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = BEB31F391A0D6F7A00F525B9 /* Build configuration list for PBXNativeTarget "SwiftGit2-OSX" */;
 			buildPhases = (
-				8B000001BBCC000000000001 /* Install Homebrew Libraries */,
+				8B000001BBCC000000000001 /* Update OpenSSL and libssh2 */,
 				BEB31F1E1A0D6F7A00F525B9 /* Sources */,
 				BEB31F1F1A0D6F7A00F525B9 /* Frameworks */,
 				BEB31F201A0D6F7A00F525B9 /* Headers */,
@@ -676,14 +676,14 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		8B000001BBCC000000000001 /* Install Homebrew Libraries */ = {
+		8B000001BBCC000000000001 /* Update OpenSSL and libssh2 */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			inputPaths = (
 			);
-			name = "Install Homebrew Libraries";
+			name = "Update OpenSSL and libssh2";
 			outputPaths = (
 				"$(SRCROOT)/External/libssh2.a",
 				"$(SRCROOT)/External/libssl.a",
@@ -691,7 +691,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\nBREW_PREFIX=$(brew --prefix 2>/dev/null || echo /opt/homebrew)\nINSTALL_PATH=\"${SRCROOT}/External\"\nfor LIB in libssh2.a libssl.a libcrypto.a; do\n  if [ ! -f \"${INSTALL_PATH}/${LIB}\" ]; then\n    cp \"${BREW_PREFIX}/lib/${LIB}\" \"${INSTALL_PATH}/\"\n  fi\ndone\n";
+			shellScript = "script/update_libssl\nscript/update_libssh2\n";
 		};
 		621E66DD1C729CE500A0F352 /* ShellScript */ = {
 			isa = PBXShellScriptBuildPhase;

@@ -79,16 +79,24 @@ for ARCH in ${ARCHS}; do
     perl -i -pe "s|^CC= gcc|CC= ${CLANG} -arch ${ARCH} |g" Makefile >> "${LOG}" 2>&1
     perl -i -pe "s|^CFLAG= (.*)|CFLAG= -isysroot ${SDKROOT} \$1|g" Makefile >> "${LOG}" 2>&1
 
-    make -j$(sysctl -n hw.logicalcpu) >> "${LOG}" 2>&1
-    make install_sw >> "${LOG}" 2>&1
+    # Build serially: OpenSSL 1.0.2's recursive make is not parallel-safe.
+    # Subdirectories each run "ar r ../libcrypto.a", and concurrent calls
+    # read-modify-write the same archive, so one silently drops the other's
+    # objects (cryptlib.o, o_time.o and friends go missing).
+    #
+    # build_libs stops after libcrypto/libssl; "all" would additionally link
+    # the openssl apps and test binaries, which we don't ship.
+    make build_libs >> "${LOG}" 2>&1
+
+    mkdir -p "${INSTALL_PREFIX}/lib" "${INSTALL_PREFIX}/include"
+    cp libcrypto.a libssl.a "${INSTALL_PREFIX}/lib/"
+    # include/openssl is a tree of symlinks into the build dir; -L resolves
+    # them so the prefix stays valid after TMP_BUILD is removed. libssh2
+    # configures against this prefix via --with-libssl-prefix.
+    cp -RL include/openssl "${INSTALL_PREFIX}/include/"
 
     popd > /dev/null
-    rm -rf "${TMP_BUILD}"
-
-    mkdir -p "${INSTALL_PREFIX}/lib"
-    cp "${TMP_INSTALL}/lib/libcrypto.a" "${INSTALL_PREFIX}/lib/"
-    cp "${TMP_INSTALL}/lib/libssl.a" "${INSTALL_PREFIX}/lib/"
-    rm -rf "${TMP_INSTALL}"
+    rm -rf "${TMP_BUILD}" "${TMP_INSTALL}"
 
     BUILT_CRYPTO_PATHS+=("${INSTALL_PREFIX}/lib/libcrypto.a")
     BUILT_SSL_PATHS+=("${INSTALL_PREFIX}/lib/libssl.a")

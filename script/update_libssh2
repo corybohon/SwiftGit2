@@ -62,9 +62,19 @@ for ARCH in ${ARCHS}; do
     LOG="${INSTALL_PREFIX}/build-libssh2.log"
     echo "${LOG}"
 
-    rm -rf "${LIB_PATH}/src-${ARCH}"
-    cp -R "${ROOT_PATH}/External/libssh2" "${LIB_PATH}/src-${ARCH}"
-    pushd "${LIB_PATH}/src-${ARCH}" > /dev/null
+    # Build under space-free temp paths. libssh2's configure uses autoconf's
+    # AC_LIB_HAVE_LINKFLAGS, which interpolates the OpenSSL prefix into the
+    # link test unquoted -- a space anywhere in the path (e.g. "Repo Man")
+    # splits the argument and the crypto check fails with "No crypto library
+    # found". The OpenSSL build sidesteps the same problem the same way.
+    TMP_BUILD="/tmp/libssh2-mac-build-${ARCH}"
+    TMP_INSTALL="/tmp/libssh2-mac-install-${ARCH}"
+    TMP_OPENSSL="/tmp/libssh2-mac-openssl-${ARCH}"
+
+    rm -rf "${TMP_BUILD}" "${TMP_INSTALL}" "${TMP_OPENSSL}"
+    cp -R "${ROOT_PATH}/External/libssh2" "${TMP_BUILD}"
+    cp -R "${OPENSSL_PREFIX}" "${TMP_OPENSSL}"
+    pushd "${TMP_BUILD}" > /dev/null
 
     if [ "${ARCH}" == "arm64" ] || [ "${ARCH}" == "arm64e" ]; then
         HOST="aarch64-apple-darwin"
@@ -79,15 +89,19 @@ for ARCH in ${ARCHS}; do
     ./buildconf >> "${LOG}" 2>&1
     ./configure \
         --host="${HOST}" \
-        --prefix="${INSTALL_PREFIX}" \
+        --prefix="${TMP_INSTALL}" \
         --with-openssl \
-        --with-libssl-prefix="${OPENSSL_PREFIX}" \
+        --with-libssl-prefix="${TMP_OPENSSL}" \
         --disable-shared \
         --enable-static >> "${LOG}" 2>&1
     make >> "${LOG}" 2>&1
     make install >> "${LOG}" 2>&1
 
     popd > /dev/null
+
+    mkdir -p "${INSTALL_PREFIX}/lib"
+    cp "${TMP_INSTALL}/lib/libssh2.a" "${INSTALL_PREFIX}/lib/"
+    rm -rf "${TMP_BUILD}" "${TMP_INSTALL}" "${TMP_OPENSSL}"
 
     BUILT_LIBS+=("${INSTALL_PREFIX}/lib/libssh2.a")
 done
