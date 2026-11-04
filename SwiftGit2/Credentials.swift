@@ -48,6 +48,8 @@ final class CloneCallbackContext {
 	let credentials: Credentials
 	let onTransferProgress: ((Int, Int, Int64) -> Void)?
 	let shouldAbort: (() -> Bool)?
+	/// Refs the server refused during a push (ref name → server status message).
+	var pushRejections: [String: String] = [:]
 
 	init(_ credentials: Credentials,
 		 onTransferProgress: ((Int, Int, Int64) -> Void)? = nil,
