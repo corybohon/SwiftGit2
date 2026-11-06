@@ -84,6 +84,9 @@ internal func credentialsCallback(
 
 	let name = username.map(String.init(cString:))
 	let context = CloneCallbackContext.fromPointer(payload!)
+	// libgit2 asks again after every 401; a cancelled operation must stop
+	// answering or an auth retry loop can't be interrupted.
+	if context.shouldAbort?() == true { return GIT_EUSER.rawValue }
 	let result: Int32
 
 	switch context.credentials {
@@ -113,3 +116,32 @@ internal func transferProgressCallback(
 	handler(Int(s.received_objects), Int(s.total_objects), Int64(s.received_bytes))
 	return 0
 }
+
+/// libgit2 sideband-progress callback — fires for every progress line the server sends
+/// ("Enumerating objects…", "Counting objects…"). It is the only callback libgit2 runs
+/// between the ref advertisement and the first pack byte, so it is where an abort
+/// requested during the server-side pack phase gets honored.
+internal func sidebandProgressCallback(
+	str: UnsafePointer<CChar>?,
+	len: Int32,
+	payload: UnsafeMutableRawPointer?) -> Int32 {
+
+	guard let payload else { return 0 }
+	let context = CloneCallbackContext.fromPointer(payload)
+	return context.shouldAbort?() == true ? GIT_EUSER.rawValue : 0
+}
+
+/// libgit2 certificate-check callback — runs right after the TLS/SSH handshake, the
+/// earliest point at which an abort can be honored. `GIT_PASSTHROUGH` keeps libgit2's
+/// own validation in effect, so this never changes which certificates are accepted.
+internal func certificateCheckCallback(
+	cert: UnsafeMutablePointer<git_cert>?,
+	valid: Int32,
+	host: UnsafePointer<CChar>?,
+	payload: UnsafeMutableRawPointer?) -> Int32 {
+
+	guard let payload else { return GIT_PASSTHROUGH.rawValue }
+	let context = CloneCallbackContext.fromPointer(payload)
+	return context.shouldAbort?() == true ? GIT_EUSER.rawValue : GIT_PASSTHROUGH.rawValue
+}
+

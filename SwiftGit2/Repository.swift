@@ -67,9 +67,12 @@ private func fetchOptions(credentials: Credentials,
 	options.callbacks.payload = context.toPointer()
 	options.callbacks.credentials = credentialsCallback
 	options.callbacks.transfer_progress = transferProgressCallback
+	options.callbacks.sideband_progress = sidebandProgressCallback
+	options.callbacks.certificate_check = certificateCheckCallback
 
 	return options
 }
+
 
 private func cloneOptions(bare: Bool = false, localClone: Bool = false, fetchOptions: git_fetch_options? = nil,
                           checkoutOptions: git_checkout_options? = nil) -> git_clone_options {

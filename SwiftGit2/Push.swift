@@ -26,6 +26,8 @@ private func remoteCallbacks(context: CloneCallbackContext) -> git_remote_callba
 	var callbacks = git_remote_callbacks()
 	git_remote_init_callbacks(&callbacks, UInt32(GIT_REMOTE_CALLBACKS_VERSION))
 	callbacks.credentials = credentialsCallback
+	callbacks.sideband_progress = sidebandProgressCallback
+	callbacks.certificate_check = certificateCheckCallback
 	callbacks.payload = context.toPointer()
 	callbacks.push_update_reference = pushUpdateReferenceCallback
 	callbacks.push_transfer_progress = pushTransferProgressCallback
@@ -69,8 +71,10 @@ extension Repository {
 
 	/// Lists the refs `url` advertises for pushing (heads, tags, and anything
 	/// else the server exposes). Uses an anonymous remote: nothing is written
-	/// to this repository's config.
-	public func remoteReferences(url: String, credentials: Credentials) -> Result<[RemoteReference], NSError> {
+	/// to this repository's config. `shouldAbort` is polled from libgit2's
+	/// callbacks so a cancelled caller doesn't wait out the connection.
+	public func remoteReferences(url: String, credentials: Credentials,
+	                             shouldAbort: (() -> Bool)? = nil) -> Result<[RemoteReference], NSError> {
 		var remote: OpaquePointer?
 		var rc = git_remote_create_anonymous(&remote, pointer, url)
 		guard rc == GIT_OK.rawValue, let remote else {
@@ -78,11 +82,15 @@ extension Repository {
 		}
 		defer { git_remote_free(remote) }
 
-		let context = CloneCallbackContext(credentials)
+		let context = CloneCallbackContext(credentials, shouldAbort: shouldAbort)
 		var callbacks = remoteCallbacks(context: context)
 		defer { CloneCallbackContext.releasePointer(callbacks.payload) }
 
+		if shouldAbort?() == true {
+			return .failure(NSError(gitError: GIT_EUSER.rawValue, pointOfFailure: "git_remote_connect"))
+		}
 		rc = git_remote_connect(remote, GIT_DIRECTION_PUSH, &callbacks, nil, nil)
+
 		guard rc == GIT_OK.rawValue else {
 			return .failure(NSError(gitError: rc, pointOfFailure: "git_remote_connect"))
 		}
