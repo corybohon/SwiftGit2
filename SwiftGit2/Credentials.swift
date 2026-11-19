@@ -48,6 +48,13 @@ final class CloneCallbackContext {
 	let credentials: Credentials
 	let onTransferProgress: ((Int, Int, Int64) -> Void)?
 	let shouldAbort: (() -> Bool)?
+	/// How many times libgit2 has asked for credentials during this operation.
+	/// libgit2 1.1's SSH transport asks again after every rejected attempt with
+	/// no limit of its own, and the answer here never changes, so the callback
+	/// gives up once the same credentials have been refused.
+	var credentialAttempts = 0
+	/// Offers of the same credentials allowed before giving up.
+	static let maxCredentialAttempts = 2
 	/// Refs the server refused during a push (ref name → server status message).
 	var pushRejections: [String: String] = [:]
 
@@ -87,13 +94,19 @@ internal func credentialsCallback(
 	// libgit2 asks again after every 401; a cancelled operation must stop
 	// answering or an auth retry loop can't be interrupted.
 	if context.shouldAbort?() == true { return GIT_EUSER.rawValue }
+	context.credentialAttempts += 1
+	if context.credentialAttempts > CloneCallbackContext.maxCredentialAttempts {
+		git_error_set_str(Int32(GIT_ERROR_NET.rawValue), "authentication failed: the server rejected the credentials")
+		return GIT_EAUTH.rawValue
+	}
 	let result: Int32
 
 	switch context.credentials {
 	case .default:
 		result = git_cred_default_new(cred)
 	case .sshAgent:
-		result = git_cred_ssh_key_from_agent(cred, name!)
+		// libgit2 passes no username when the URL has none ("ssh://host/path").
+		result = git_cred_ssh_key_from_agent(cred, name ?? "git")
 	case .plaintext(let username, let password):
 		result = git_cred_userpass_plaintext_new(cred, username, password)
 	case .sshMemory(let username, let publicKey, let privateKey, let passphrase):
